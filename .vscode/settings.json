@@ -1,0 +1,8 @@
+{
+  "workbench.colorCustomizations": {
+    "activityBar.background": "#0E276E",
+    "titleBar.activeBackground": "#14379A",
+    "titleBar.activeForeground": "#FAFBFE"
+  },
+  "dotnet.defaultSolution": "AITranslateServer.sln"
+}

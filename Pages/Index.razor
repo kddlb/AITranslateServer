@@ -1,0 +1,141 @@
+﻿@page "/"
+@using Microsoft.Extensions.Logging;
+@using Newtonsoft.Json;
+@using System.Text;
+@using System.Net;
+@using System.Web;
+@using System.Text.RegularExpressions;
+
+@inject ILogger<Index> Logger;
+@inject IConfiguration Configuration;
+
+<PageTitle>AITranslate</PageTitle>
+<EditForm Model="@aiTranslation" OnValidSubmit="@HandleValidSubmit">
+
+    <div class="row py-3">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        <div class="col-2">
+            <label class="form-label">System message</label>
+            <InputTextArea class="form-control" @bind-Value="aiTranslation.SystemMessage" />
+        </div>
+        <div class="col-5">
+            <label class="form-label">User message</label>
+            <InputTextArea class="form-control" @bind-Value="aiTranslation.UserMessage" />
+        </div>
+        <div class="col-5">
+            <label class="form-label">Assistant message</label>
+            <div class="textView card">
+                <div class="card-body">
+                    <p class="card-text">
+                        @((MarkupString)Regex.Replace(HttpUtility.HtmlEncode(aiTranslation.AssistantMessage ?? ""), "\r?\n|\r", "<br />"))
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-2">
+            <div class="form-floating">
+                <InputSelect @bind-Value="aiTranslation.ModelName" class="form-select" aria-label="Model">
+                    <option value="gpt-4">GPT-4</option>
+                    <option value="gpt-3.5-turbo-16k">GPT-3.5 Turbo 16k</option>
+                </InputSelect>
+                <label>Model</label>
+            </div>
+        </div>
+        <div class="col-10">
+            <button type="submit" class="btn btn-success btn-lg" disabled=@isTaskRunning>Translate</button>
+        </div>
+    </div>
+
+</EditForm>
+
+<style>
+    textarea, .textView {
+        height: 80vh;
+        resize: none;
+    }
+    .textView {
+        overflow-y: auto;
+    }
+</style>
+
+@code {
+
+    bool isTaskRunning = false;
+
+    private Data.AITranslation aiTranslation = new();
+
+    private async Task HandleValidSubmit()
+    {
+        Logger.LogInformation("Valid Submit");
+        isTaskRunning = true;
+
+        aiTranslation.AssistantMessage = "";
+
+        string OAKey = Configuration["OpenAIKey"];
+
+        var request = new OAIRequest
+            {
+                Model = aiTranslation.ModelName,
+                Messages = new List<OAIChatMessage>
+                {
+                    new OAIChatMessage
+                    {
+                        Role = "system",
+                        Content = aiTranslation.SystemMessage
+                    },
+                    new OAIChatMessage
+                    {
+                        Role = "user",
+                        Content = aiTranslation.UserMessage
+                    }
+                },
+                Stream = true,
+            };
+
+        var requestJson = JsonConvert.SerializeObject(request);
+        var requestBytes = Encoding.UTF8.GetBytes(requestJson);
+        #pragma warning disable 
+        var htr = WebRequest.CreateHttp("https://api.openai.com/v1/chat/completions");
+        #pragma warning restore
+        htr.Method = "POST";
+        htr.ContentType = "application/json";
+        htr.Headers.Add("Authorization", $"Bearer {OAKey}");
+        htr.ContentLength = requestBytes.Length;
+        htr.AllowReadStreamBuffering = false;
+        using (var requestStream = htr.GetRequestStream())
+        {
+            requestStream.Write(requestBytes, 0, requestBytes.Length);
+        }
+
+        using (var responseStream = htr.GetResponse().GetResponseStream())
+        using (var responseReader = new StreamReader(responseStream))
+        {
+            string line;
+            while ((line = await responseReader.ReadLineAsync()) != null)
+            {
+                if (line == "")
+                {
+                    continue;
+                }
+                var json = line.Substring(6);
+                if (json == "[DONE]")
+                {
+                    isTaskRunning = false;
+                    break;
+                }
+                var chunk = OaijsonChunk.FromJson(json);
+                if (chunk.Choices[0].Delta.Content != null)
+                {
+                    aiTranslation.AssistantMessage += chunk.Choices[0].Delta.Content;
+                    StateHasChanged();
+                }
+            }
+        }
+
+    }
+}
